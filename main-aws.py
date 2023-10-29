@@ -7,13 +7,14 @@ import pyperclip
 import time
 import pygame
 import psutil, os
+import hashlib
 
-def get_aws_mp3(text, filename):
+def get_aws_mp3(text, filename, voice="Joanna"):
     try:
         # Request speech synthesis
         ssmlText = "<speak><prosody rate=\"125%\">" + text + "</prosody></speak>"
         response = polly.synthesize_speech(Text=ssmlText, OutputFormat="mp3",
-                                            VoiceId="Joanna", TextType="ssml")
+                                            VoiceId=voice, TextType="ssml")
     except (BotoCoreError, ClientError) as error:
         # The service returned an error, exit gracefully
         print(error)
@@ -43,11 +44,35 @@ def get_aws_mp3(text, filename):
         sys.exit(-1)
 
 
-def should_play_clip(clipText):
+def should_play_clip(clipText, speakerName):
+    if "Save slot" in speakerName:
+            return False
+    if "Load slot" in speakerName:
+            return False
     if not clipText.startswith("•"):
         if len(clipText) > 1:
             return True
     return False
+
+def get_speaker_name(clipText):
+    clipText = clipNow.split(":")
+    if len(clipText) > 1:
+        text = clipText[0]
+    else:
+        return "Misc"
+    text = text.strip()
+    numSpaces = len(text.split())-1
+    if numSpaces > 2:
+        return "Misc"
+    if "?" in text:
+        return "Unknown"
+    return text
+
+def try_makedir(name):
+    try:
+        os.mkdir(name)
+    except:
+        pass
 
 def get_formatted_clip(clipText):
     clipText = clipNow.split(":")
@@ -55,12 +80,29 @@ def get_formatted_clip(clipText):
         text = clipText[1]
     else:
         text = clipNow
+    numSpacesInSpeaker = len(clipText[0].split())-1
+    if numSpacesInSpeaker > 2:
+        text = clipNow
     text = text.replace("\"", "")
     text = text.replace(":", "")
     text = text.replace("''", "")
     text = text.replace("—", "")        
+    text = text.replace("Snoopy", "you") # removing my char name
+    text = text.replace("DerpTown", "your home town") # removing my hometown name
     text = text.strip()
     return text
+
+def get_aws_voice_from_speaker(speakerName):
+    voiceName = "Joanna"
+    if speakerName == "Misc":
+        voiceName = "Joanna"
+    elif speakerName == "Snoopy":  # change to your char name if you want to change voices, etc
+        voiceName = "Matthew"
+    elif speakerName == "Frou-frou":
+        voiceName = "Ivy"
+    elif speakerName == "Gretchen":
+        voiceName = "Ivy"
+    return voiceName
 
 session = Session(region_name="us-west-1") # setup AWS Polly using ENV vars or config file according to AWS docs
 polly = session.client("polly")
@@ -73,6 +115,7 @@ pygame.init()
 
 lastClip = "" 
 index = 0
+try_makedir("cache")
 
 while True:
     time.sleep(0.1)
@@ -80,13 +123,21 @@ while True:
     if clipNow != lastClip:    
         index += 1
         lastClip = clipNow
+        speakerName = get_speaker_name(clipNow)        
         formattedClip = get_formatted_clip(clipNow)
-        if should_play_clip(formattedClip):
+        if should_play_clip(formattedClip, speakerName):
             try:                
-                print(str(index) + ": " + formattedClip)
-                get_aws_mp3(formattedClip, "audio.mp3")
+                result = hashlib.sha256(formattedClip.encode())
+                try_makedir("cache\\" + speakerName)
+                fileName = "cache\\" + speakerName + "\\" + result.hexdigest() + ".mp3"
+                if not os.path.isfile(fileName):
+                    voiceName = get_aws_voice_from_speaker(speakerName)
+                    get_aws_mp3(formattedClip, fileName, voiceName)
+                    print(speakerName + ": " + str(index) + ": " + formattedClip)
+                else:
+                    print(speakerName + ": " + str(index) + ": " + formattedClip + " (cached)")
 
-                tada = mixer.Sound('audio.mp3')
+                tada = mixer.Sound(fileName)
                 channel = tada.play()
                 while channel.get_busy():
                     clipNow = pyperclip.paste()
@@ -94,9 +145,5 @@ while True:
                         channel.stop()
                     else:
                         pygame.time.wait(50)
-                try:                
-                    os.remove("audio.mp3")
-                except:
-                    pass
             except:
                 print("Error playing clip")
